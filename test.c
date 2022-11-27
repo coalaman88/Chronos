@@ -8,7 +8,7 @@
 int main(int arg, char* argv[]){
   if(arg <= 1){
     puts("no args!");
-    return 0;
+    return -1;
   }
 
   // parse int arg

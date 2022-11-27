@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ------------------------------------------------------------------------------
 */
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <timeapi.h>
@@ -29,31 +30,83 @@ SOFTWARE.
 #include <stdint.h>
 
 typedef int32_t   i32;
+typedef uint32_t  u32;
 typedef uint64_t  u64;
 typedef i32       b32;
 
+#define true  1
+#define false 0
+
 #define array_size(X) (sizeof(X) / sizeof(X[0]))
 
-wchar_t cmd_buffer[1024];
+wchar_t CmdBuffer[1024];
 
-int wmain(int arg, wchar_t* argv[]){
-  if(arg == 1){
-    printf("no args!\n");
-    return 0;
+enum ConfigFlags{
+  timer_mode = 0x1,
+  show_logo  = 0x2,
+  show_hex   = 0x4,
+  show_time  = 0x8,
+  show_return_value = 0x10,
+  show_return_tag   = 0x20
+};
+
+int wmain(int args, wchar_t* argv[]){
+
+  u32 config_flags = show_time | show_logo | show_return_value | show_return_tag;
+  DWORD creation_flag = 0;
+
+  //parse args
+  i32 arg;
+  for(arg = 1; arg < args; arg++){
+    if(argv[arg][0] != '-') break;
+
+    if(wcscmp(argv[arg], L"-h") == 0){
+      puts("Usage:\n-f: print in h:min:sec.ms,us formart\n"
+           "-nologo: suppresses logo\n"
+           "-noreturn: suppresses return value of the called program\n"
+           "-notag: suppresses 'return:' of returned value\n"
+           "-hex: show returned value in hexdecimal logo\n"
+           "-console: create new console for the exe\n"
+           "-silent: detach exe (no output is shown)\n"
+           "-notime: supresses time");
+      return 0;
+    } else if(wcscmp(argv[arg], L"-f") == 0){
+      config_flags |= timer_mode;
+    } else if(wcscmp(argv[arg], L"-hex") == 0){
+      config_flags |= show_hex;
+    } else if(wcscmp(argv[arg], L"-nologo") == 0){
+      config_flags &= ~show_logo;
+    } else if(wcscmp(argv[arg], L"-notime") == 0){
+      config_flags &= ~show_time;
+    } else if(wcscmp(argv[arg], L"-noreturn") == 0){
+      config_flags &= ~show_return_value;
+    } else if(wcscmp(argv[arg], L"-notag") == 0){
+      config_flags &= ~show_return_tag;
+    } else if(wcscmp(argv[arg], L"-console") == 0){
+      creation_flag = CREATE_NEW_CONSOLE;
+    } else if(wcscmp(argv[arg], L"-silent") == 0){
+      creation_flag = DETACHED_PROCESS;
+    }else {
+      puts("Bad argument! Use -h for help");
+      return 1;
+    }
+  }
+  if(arg >= args){
+    puts("no input exe! Format: " EXE_NAME " [-args] [exe] [exe args]");
+    return 2;
   }
 
   LARGE_INTEGER freq, start, end;
   QueryPerformanceFrequency(&freq);
 
-  i32 cmd_buffer_index = 0;
-  for(i32 i = 1; i < arg; i++){
+  i32 CmdBuffer_index = 0;
+  for(i32 i = arg; i < args; i++){
     wchar_t *p = argv[i];
     while(*p)
-      cmd_buffer[cmd_buffer_index++] = *p++;
-    cmd_buffer[cmd_buffer_index++] = ' ';
+      CmdBuffer[CmdBuffer_index++] = *p++;
+    CmdBuffer[CmdBuffer_index++] = ' ';
   }
-  cmd_buffer[cmd_buffer_index] = '\0';
-  wprintf(cmd_buffer);
+  CmdBuffer[CmdBuffer_index] = '\0';
 
   STARTUPINFOW si;
   PROCESS_INFORMATION pi;
@@ -62,11 +115,7 @@ int wmain(int arg, wchar_t* argv[]){
   ZeroMemory(&pi, sizeof(pi));
   si.cb = sizeof(si);
 
-
-  TIMECAPS time_caps;
-  timeGetDevCaps(&time_caps, sizeof(time_caps));
-
-  b32 result = CreateProcessW(NULL, cmd_buffer, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+  b32 result = CreateProcessW(NULL, CmdBuffer, NULL, NULL, FALSE, creation_flag, NULL, NULL, &si, &pi);
   if(!result){
     wprintf(L"\nfailed to start '%s'!\n", argv[1]);
     return 1;
@@ -85,8 +134,6 @@ int wmain(int arg, wchar_t* argv[]){
   u64 micro_freq = freq.QuadPart / 1000000;
   u64 current_time = (end.QuadPart - start.QuadPart) / micro_freq;
 
-  const char *time_units[] = {"us", "ms", "sec", "min", "hour"};
-
   i32 clock[5];
 
   // decimal parts
@@ -101,13 +148,28 @@ int wmain(int arg, wchar_t* argv[]){
     current_time /= 60;
   }
 
+  if(config_flags & show_logo)
+    printf("---" EXE_NAME "---\n");
+
+  if(config_flags & show_return_value){
+    if(config_flags & show_return_tag) printf("returned:");
+    const char *return_format = config_flags & show_hex? "0x%x\n" : "%u\n";
+    printf(return_format, exit_code);
+  }
+
+  if((config_flags & show_time) == 0) return 0;
+
+  if(config_flags & timer_mode){
+    printf("%02d:%02d:%02d.%d,%d\n", clock[4], clock[3], clock[2], clock[1], clock[0]);
+    return 0;
+  }
+
+  const char *time_units[] = {"us", "ms", "sec", "min", "hour"};
+
   i32 index;
   for(index = array_size(clock) - 1; index > 0; index--)
     if(clock[index]) break;
 
-
-  printf("\n---" EXE_NAME "---\n");
-  printf("returned:%u\n", exit_code);
   for(i32 i = index; i >= 0; i--)
     printf("%d %s ", clock[i], time_units[i]);
   putchar('\n');
