@@ -28,6 +28,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <assert.h>
 
 typedef int32_t   i32;
 typedef uint32_t  u32;
@@ -50,12 +51,42 @@ enum ConfigFlags{
   show_return_tag   = 0x20
 };
 
-int wmain(int args, wchar_t* argv[]){
+static inline i32 wparse_i32(const wchar_t *s, b32 *error){
+  assert(error);
+  if(!s){
+    *error = true;
+    return 0;
+  }
+
+  i32 value = 0;
+  i32 sign = *s == '-'? s++, -1 : 1;
+
+  while(*s >= '0' && *s <= '9'){
+    value *= 10;
+    value += *s - '0';
+    s++;
+  }
+
+  *error = *s != 0;
+  return value * sign;
+}
+
+static inline u32 wappend(wchar_t *d, u32 d_size, const wchar_t *s){
+  u32 i = 0;
+  while(s[i]){
+    assert(i < d_size);
+    d[i] = s[i]; i++;
+  }
+  return i;
+}
+
+i32 wmain(i32 args, wchar_t* argv[]){
 
   u32 config_flags = show_time | show_logo | show_return_value | show_return_tag;
-  DWORD creation_flag = 0;
+  DWORD cp_priority_flag = 0; // default priority class of the calling process
+  DWORD cp_options_flag  = 0;
 
-  //parse args
+  // parse args
   i32 arg;
   for(arg = 1; arg < args; arg++){
     if(argv[arg][0] != '-') break;
@@ -65,10 +96,11 @@ int wmain(int args, wchar_t* argv[]){
            "-nologo: suppresses logo\n"
            "-noreturn: suppresses return value of the called program\n"
            "-notag: suppresses 'return:' of returned value\n"
-           "-hex: show returned value in hexdecimal logo\n"
+           "-hex: show returned value in hexdecimal\n"
            "-console: create new console for the exe\n"
            "-silent: detach exe (no output is shown)\n"
-           "-notime: supresses time");
+           "-notime: supresses time\n"
+           "-priority: start exe with specified priority level -2 to 3 (low to high). See win32 priority class flags for more info.");
       return 0;
     } else if(wcscmp(argv[arg], L"-f") == 0){
       config_flags |= timer_mode;
@@ -82,32 +114,57 @@ int wmain(int args, wchar_t* argv[]){
       config_flags &= ~show_return_value;
     } else if(wcscmp(argv[arg], L"-notag") == 0){
       config_flags &= ~show_return_tag;
+    } else if(wcscmp(argv[arg], L"-priority") == 0){
+      if(++arg >= args){
+        printf("incomplete argument! use -h for help");
+        return 1;
+      }
+
+      const DWORD win_priority_flags[6] = {IDLE_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
+        ABOVE_NORMAL_PRIORITY_CLASS, HIGH_PRIORITY_CLASS, REALTIME_PRIORITY_CLASS};
+
+      b32 error;
+      const wchar_t *level_arg = argv[arg];
+      const i32 level = wparse_i32(level_arg, &error);
+      if(error){
+        wprintf(L"invalid '%s' priority level, integer expected!\n", argv[arg]);
+        return 2;
+      }
+
+      if(level < -2 || level > 3){
+        printf("out of range priority level '%d'! -priority [-2, 3]\n", level);
+        return 3;
+      }
+
+      cp_priority_flag = win_priority_flags[2 + level];
     } else if(wcscmp(argv[arg], L"-console") == 0){
-      creation_flag = CREATE_NEW_CONSOLE;
+      cp_options_flag = NORMAL_PRIORITY_CLASS | CREATE_NEW_CONSOLE;
     } else if(wcscmp(argv[arg], L"-silent") == 0){
-      creation_flag = DETACHED_PROCESS;
+      cp_options_flag  = NORMAL_PRIORITY_CLASS | DETACHED_PROCESS;
     }else {
       puts("Bad argument! Use -h for help");
-      return 1;
+      return 4;
     }
   }
+
   if(arg >= args){
     puts("no input exe! Format: " EXE_NAME " [-args] [exe] [exe args]");
-    return 2;
+    return 5;
   }
+
+  // copying args
+  u32 CmdBuffer_index = 0;
+  const u32 buff_len = array_size(CmdBuffer);
+  for(i32 i = arg; i < args; i++){
+    CmdBuffer_index += wappend(CmdBuffer + CmdBuffer_index, buff_len, argv[i]);
+    CmdBuffer_index += wappend(CmdBuffer + CmdBuffer_index, buff_len, L" ");
+  }
+  CmdBuffer[CmdBuffer_index] = '\0';
 
   LARGE_INTEGER freq, start, end;
   QueryPerformanceFrequency(&freq);
 
-  i32 CmdBuffer_index = 0;
-  for(i32 i = arg; i < args; i++){
-    wchar_t *p = argv[i];
-    while(*p)
-      CmdBuffer[CmdBuffer_index++] = *p++;
-    CmdBuffer[CmdBuffer_index++] = ' ';
-  }
-  CmdBuffer[CmdBuffer_index] = '\0';
-
+  // start process
   STARTUPINFOW si;
   PROCESS_INFORMATION pi;
 
@@ -115,12 +172,13 @@ int wmain(int args, wchar_t* argv[]){
   ZeroMemory(&pi, sizeof(pi));
   si.cb = sizeof(si);
 
-  b32 result = CreateProcessW(NULL, CmdBuffer, NULL, NULL, FALSE, creation_flag, NULL, NULL, &si, &pi);
+  b32 result = CreateProcessW(NULL, CmdBuffer, NULL, NULL, FALSE, cp_options_flag | cp_priority_flag, NULL, NULL, &si, &pi);
   if(!result){
-    wprintf(L"\nfailed to start '%s'!\n", argv[1]);
-    return 1;
+    wprintf(L"failed to start '%s'!\n", argv[arg]);
+    return 6;
   }
 
+  // wait for process to finish
   QueryPerformanceCounter(&start);
   WaitForSingleObject(pi.hProcess, INFINITE);
   QueryPerformanceCounter(&end);
@@ -131,6 +189,7 @@ int wmain(int args, wchar_t* argv[]){
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
 
+  // process time
   u64 micro_freq = freq.QuadPart / 1000000;
   u64 current_time = (end.QuadPart - start.QuadPart) / micro_freq;
 
