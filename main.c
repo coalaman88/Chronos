@@ -48,7 +48,8 @@ enum ConfigFlags{
   show_hex   = 0x4,
   show_time  = 0x8,
   show_return_value = 0x10,
-  show_return_tag   = 0x20
+  show_return_tag   = 0x20,
+  show_full_time    = 0x40
 };
 
 static inline i32 wparse_i32(const wchar_t *s, b32 *error){
@@ -80,8 +81,42 @@ static inline u32 wappend(wchar_t *d, u32 d_size, const wchar_t *s){
   return i;
 }
 
+void build_clock(i32 clock[5], u64 time){
+  // decimal parts
+  for(i32 i = 0; i < 2; i++){
+    clock[i] = time % 1000;
+    time /= 1000;
+  }
+
+  // sexagenary
+  for(i32 i = 2; i < 5; i++){
+    clock[i] = time % 60;
+    time /= 60;
+  }
+}
+
+static inline u64 filetime_to_microsecs(FILETIME f){
+  u64 t = (u64)f.dwHighDateTime << 32 | (u64)f.dwLowDateTime;
+  return t / 10; // 100-nanosecs to microsecs
+}
+
+void print_nice_format_clock(const char *tag, i32 clock[5]){
+  // find nonzero start time unit
+  i32 index;
+  for(index = 4; index > 0; index--)
+    if(clock[index]) break;
+
+  const char *time_units[] = {"us", "ms", "sec", "min", "hour"};
+
+  printf(tag);
+  for(i32 i = index; i >= 0; i--)
+    printf("%d %s ", clock[i], time_units[i]);
+  putchar('\n');
+}
+
 i32 wmain(i32 args, wchar_t* argv[]){
 
+  // flags
   u32 config_flags = show_time | show_logo | show_return_value | show_return_tag;
   DWORD cp_priority_flag = 0; // default priority class of the calling process
   DWORD cp_options_flag  = 0;
@@ -93,6 +128,7 @@ i32 wmain(i32 args, wchar_t* argv[]){
 
     if(wcscmp(argv[arg], L"-h") == 0){
       puts("Usage:\n-f: print in h:min:sec.ms,us formart\n"
+           "-c: show total user and kernel time\n"
            "-nologo: suppresses logo\n"
            "-noreturn: suppresses return value of the called program\n"
            "-notag: suppresses 'return:' of returned value\n"
@@ -100,10 +136,12 @@ i32 wmain(i32 args, wchar_t* argv[]){
            "-console: create new console for the exe\n"
            "-silent: detach exe (no output is shown)\n"
            "-notime: supresses time\n"
-           "-priority: start exe with specified priority level -2 to 3 (low to high). See win32 priority class flags for more info.");
+           "-priority: start exe with specified priority level -2 to 3 (low to high). Default is inherited. See win32 priority class flags for more info.");
       return 0;
     } else if(wcscmp(argv[arg], L"-f") == 0){
       config_flags |= timer_mode;
+    } else if(wcscmp(argv[arg], L"-c") == 0){
+      config_flags |= show_full_time;
     } else if(wcscmp(argv[arg], L"-hex") == 0){
       config_flags |= show_hex;
     } else if(wcscmp(argv[arg], L"-nologo") == 0){
@@ -186,27 +224,25 @@ i32 wmain(i32 args, wchar_t* argv[]){
   DWORD exit_code;
   GetExitCodeProcess(pi.hProcess, &exit_code);
 
+  FILETIME creation, exit, kernel, user;
+  assert(GetProcessTimes(pi.hProcess, &creation, &exit, &kernel, &user));
+  
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
 
   // process time
-  u64 micro_freq = freq.QuadPart / 1000000;
-  u64 current_time = (end.QuadPart - start.QuadPart) / micro_freq;
+  const u64 micro_freq = freq.QuadPart / 1000000;
+  const u64 elapsed_time = (end.QuadPart - start.QuadPart) / micro_freq;
 
-  i32 clock[5];
+  // alternative elapsed time from GetProcessTimes
+  // u64 getproctimes_elapsed = filetime_to_microsecs(exit) - filetime_to_microsecs(creation);
 
-  // decimal parts
-  for(i32 i = 0; i < 2; i++){
-    clock[i] = current_time % 1000;
-    current_time /= 1000;
-  }
+  i32 elapsed_clock[5], kernel_clock[5], user_clock[5];
+  build_clock(elapsed_clock, elapsed_time);
+  build_clock(user_clock, filetime_to_microsecs(user));
+  build_clock(kernel_clock, filetime_to_microsecs(kernel));
 
-  // sexagenary
-  for(i32 i = 2; i < array_size(clock); i++){
-    clock[i] = current_time % 60;
-    current_time /= 60;
-  }
-
+  // display results
   if(config_flags & show_logo)
     printf("---" EXE_NAME "---\n");
 
@@ -219,19 +255,20 @@ i32 wmain(i32 args, wchar_t* argv[]){
   if((config_flags & show_time) == 0) return 0;
 
   if(config_flags & timer_mode){
-    printf("%02d:%02d:%02d.%d,%d\n", clock[4], clock[3], clock[2], clock[1], clock[0]);
+    const i32 *c = elapsed_clock, *u = user_clock, *k = kernel_clock;
+    printf("elapsed: %02d:%02d:%02d.%03d,%03d\n", c[4], c[3], c[2], c[1], c[0]);
+    if(config_flags & show_full_time){
+      printf("user:    %02d:%02d:%02d.%03d,%03d\n", u[4], u[3], u[2], u[1], u[0]);
+      printf("kernel:  %02d:%02d:%02d.%03d,%03d\n", k[4], k[3], k[2], k[1], k[0]);
+    }
     return 0;
   }
 
-  const char *time_units[] = {"us", "ms", "sec", "min", "hour"};
-
-  i32 index;
-  for(index = array_size(clock) - 1; index > 0; index--)
-    if(clock[index]) break;
-
-  for(i32 i = index; i >= 0; i--)
-    printf("%d %s ", clock[i], time_units[i]);
-  putchar('\n');
+  print_nice_format_clock("elapsed: ", elapsed_clock);
+  if(config_flags & show_full_time){
+    print_nice_format_clock("user:    ", user_clock);
+    print_nice_format_clock("kernel:  ", kernel_clock);
+  }
 
   return 0;
 }
