@@ -49,7 +49,8 @@ enum ConfigFlags{
   show_time  = 0x8,
   show_return_value = 0x10,
   show_return_tag   = 0x20,
-  show_full_time    = 0x40
+  show_full_time    = 0x40,
+  use_exit_code     = 0x80
 };
 
 static inline i32 wparse_i32(const wchar_t *s, b32 *error){
@@ -131,6 +132,7 @@ i32 wmain(i32 args, wchar_t* argv[]){
            "-c: show total user and kernel time\n"
            "-nologo: suppresses logo\n"
            "-noreturn: suppresses return value of the called program\n"
+           "-z: use return value of called program as exit code\n"
            "-notag: suppresses 'return:' of returned value\n"
            "-hex: show returned value in hexdecimal\n"
            "-console: create new console for the exe\n"
@@ -152,6 +154,8 @@ i32 wmain(i32 args, wchar_t* argv[]){
       config_flags &= ~show_return_value;
     } else if(wcscmp(argv[arg], L"-notag") == 0){
       config_flags &= ~show_return_tag;
+    } else if(wcscmp(argv[arg], L"-z") == 0){
+      config_flags |= use_exit_code;
     } else if(wcscmp(argv[arg], L"-priority") == 0){
       if(++arg >= args){
         printf("incomplete argument! use -h for help");
@@ -252,7 +256,9 @@ i32 wmain(i32 args, wchar_t* argv[]){
     printf(return_format, exit_code);
   }
 
-  if((config_flags & show_time) == 0) return 0;
+  i32 success_code = (config_flags & use_exit_code)? exit_code : 0;
+
+  if((config_flags & show_time) == 0) return success_code;
 
   if(config_flags & timer_mode){
     const i32 *c = elapsed_clock, *u = user_clock, *k = kernel_clock;
@@ -261,7 +267,7 @@ i32 wmain(i32 args, wchar_t* argv[]){
       printf("user:    %02d:%02d:%02d.%03d,%03d\n", u[4], u[3], u[2], u[1], u[0]);
       printf("kernel:  %02d:%02d:%02d.%03d,%03d\n", k[4], k[3], k[2], k[1], k[0]);
     }
-    return 0;
+    return success_code;
   }
 
   print_nice_format_clock("elapsed: ", elapsed_clock);
@@ -270,5 +276,5 @@ i32 wmain(i32 args, wchar_t* argv[]){
     print_nice_format_clock("kernel:  ", kernel_clock);
   }
 
-  return 0;
+  return success_code;
 }
