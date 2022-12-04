@@ -117,6 +117,16 @@ void print_nice_format_clock(const char *tag, i32 clock[5]){
 
 i32 wmain(i32 args, wchar_t* argv[]){
 
+  // Prepare console to accept Virtual Terminal Sequences
+  HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+  assert(out);
+  DWORD console_mode;
+  assert(GetConsoleMode(out, &console_mode));
+  if(!(console_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)){
+    console_mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    assert(SetConsoleMode(out, console_mode));
+  }
+
   // flags
   u32 config_flags = show_time | show_logo | show_return_value | show_return_tag;
   DWORD cp_priority_flag = 0; // default priority class of the calling process
@@ -230,7 +240,7 @@ i32 wmain(i32 args, wchar_t* argv[]){
 
   FILETIME creation, exit, kernel, user;
   assert(GetProcessTimes(pi.hProcess, &creation, &exit, &kernel, &user));
-  
+
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
 
@@ -251,8 +261,9 @@ i32 wmain(i32 args, wchar_t* argv[]){
     printf("---" EXE_NAME "---\n");
 
   if(config_flags & show_return_value){
-    if(config_flags & show_return_tag) printf("returned:");
-    const char *return_format = config_flags & show_hex? "0x%x\n" : "%u\n";
+    printf(exit_code? "\x1b[1;31m" : "\x1b[1;32m"); // foreground = red : gren
+    if(config_flags & show_return_tag) printf("returned: ");
+    const char *return_format = config_flags & show_hex? "0x%x\n\x1b[0m" : "%u\n\x1b[0m"; // reset foreground
     printf(return_format, exit_code);
   }
 
